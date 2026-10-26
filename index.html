@@ -1,0 +1,845 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<title>E92 335i Gauges</title>
+<style>
+  :root {
+    --bg: #000;
+    --panel: #0b0806;
+    --amber: #ff8a1f;      /* E9x cluster orange */
+    --amber-dim: #5a3410;
+    --text: #ffb366;
+    --red: #ff2a2a;
+    --green: #3ddc84;
+    --muted: #8a6a4a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", Roboto, system-ui, sans-serif; -webkit-tap-highlight-color: transparent; }
+  body { display: flex; flex-direction: column; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+
+  header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; flex-wrap: wrap; border-bottom: 1px solid #1c130b; }
+  .brand { font-weight: 700; letter-spacing: .12em; color: var(--amber); margin-right: auto; font-size: 14px; }
+  .brand small { color: var(--muted); font-weight: 400; letter-spacing: .05em; margin-left: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #444; display: inline-block; margin-right: 6px; vertical-align: middle; }
+  .dot.on { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.busy { background: var(--amber); }
+  button { background: var(--panel); color: var(--text); border: 1px solid #2a1c10; border-radius: 8px;
+    padding: 8px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+  button:hover { border-color: var(--amber-dim); }
+  button.active { background: var(--amber); color: #000; border-color: var(--amber); }
+  button.rec.active { background: var(--red); border-color: var(--red); color: #fff; }
+  button.primary { background: var(--amber); color: #000; border-color: var(--amber); font-weight: 700; padding: 8px 18px; }
+  button:disabled { opacity: .6; cursor: default; }
+  .choice { display: block; width: 100%; text-align: left; padding: 14px 16px; margin-bottom: 10px; font-size: 16px; font-weight: 600; }
+  .choice small { display: block; color: var(--muted); font-size: 12px; font-weight: 400; margin-top: 4px; }
+  .choice.last { border-color: var(--amber); }
+
+  .shift { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; padding: 6px 12px 0; }
+  .shift i { height: 8px; border-radius: 3px; background: #140d07; }
+  .shift i.g { background: var(--green); } .shift i.y { background: var(--amber); } .shift i.r { background: var(--red); }
+  .shift.flash i { animation: flash .12s steps(2) infinite; background: var(--red); }
+  @keyframes flash { 50% { opacity: .15; } }
+
+  main { flex: 1; padding: 10px 12px 16px; overflow: auto; }
+  .big { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin-bottom: 10px; }
+  .small { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .gauge { background: radial-gradient(circle at 50% 45%, #120c07 0%, #050302 70%); border: 1px solid #1a120a;
+    border-radius: 16px; aspect-ratio: 1; display: flex; }
+  .big .gauge { max-height: 46vh; margin: 0 auto; width: 100%; }
+  .gauge svg { width: 100%; height: 100%; }
+
+  .track { fill: none; stroke: #1e140b; stroke-width: 3; }
+  .zone { fill: none; stroke-width: 5; }
+  .zone.red { stroke: var(--red); }
+  .tick { stroke: var(--amber); stroke-width: 1; opacity: .55; }
+  .tick.major { stroke-width: 2.4; opacity: 1; }
+  .tlabel { fill: var(--text); font-size: 11px; text-anchor: middle; dominant-baseline: middle; font-weight: 600; }
+  /* --nt follows the live update rate so the needle glides between readings without lagging behind */
+  .needle, .tgt, .peak { transform-box: view-box; transform-origin: 100px 100px; }
+  .needle, .tgt { transition: transform var(--nt, 140ms) linear; }
+  .needle path { fill: var(--red); filter: drop-shadow(0 0 3px rgba(255,42,42,.6)); }
+  .tgt path { fill: var(--amber); }
+  .tgt.off { display: none; }
+  .hub { fill: #1a1a1a; stroke: #333; }
+  .peak path { fill: #fff; opacity: .8; }
+  .val { fill: #fff; font-size: 26px; font-weight: 700; text-anchor: middle; font-variant-numeric: tabular-nums; }
+  .unit { fill: var(--muted); font-size: 10px; text-anchor: middle; letter-spacing: .08em; }
+  .lbl { fill: var(--amber); font-size: 11px; text-anchor: middle; letter-spacing: .18em; font-weight: 700; }
+  .pk { fill: var(--muted); font-size: 9px; text-anchor: middle; font-variant-numeric: tabular-nums; }
+  .gauge.warn { border-color: var(--red); animation: warn 0.8s ease-in-out infinite; }
+  .gauge.warn .val { fill: var(--red); }
+  @keyframes warn { 50% { box-shadow: 0 0 18px rgba(255,42,42,.55) inset; } }
+  .gauge.na .val { fill: #555; }
+
+  dialog { background: #0d0905; color: var(--text); border: 1px solid #3a2612; border-radius: 14px; max-width: 460px; width: calc(100% - 32px); }
+  dialog::backdrop { background: rgba(0,0,0,.7); }
+  dialog h2 { margin: 0 0 12px; font-size: 16px; color: var(--amber); letter-spacing: .1em; }
+  fieldset { border: 1px solid #2a1c10; border-radius: 10px; margin: 0 0 12px; padding: 10px 12px; }
+  legend { color: var(--muted); font-size: 12px; padding: 0 4px; }
+  label { display: inline-flex; align-items: center; gap: 6px; margin: 4px 14px 4px 0; font-size: 14px; }
+  input[type=number], select { background: #000; color: var(--text); border: 1px solid #3a2612; border-radius: 6px; padding: 6px; font: inherit; width: 110px; }
+  select[name=dme] { width: auto; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; }
+  .row { display: flex; justify-content: flex-end; gap: 8px; }
+  .hint { font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #2a0b0b; color: #ffd0d0;
+    border: 1px solid var(--red); padding: 10px 16px; border-radius: 10px; font-size: 14px; display: none; max-width: 90vw; z-index: 10; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">E92 335i<small><span class="dot" id="dot"></span><span id="status">Disconnected</span></small></div>
+  <button id="btnConnect" class="primary">Connect</button>
+  <button id="btnDemo">Demo</button>
+  <button id="btnLog" class="rec">● Log</button>
+  <button id="btnPeaks">Reset peaks</button>
+  <button id="btnSettings">Settings</button>
+  <button id="btnFs" title="Fullscreen">⛶</button>
+</header>
+<div class="shift" id="shift"></div>
+<main>
+  <div class="big" id="big"></div>
+  <div class="small" id="small"></div>
+</main>
+
+<dialog id="dlg">
+  <form method="dialog">
+    <h2>SETTINGS</h2>
+    <fieldset><legend>Engine computer</legend>
+      <select name="dme">
+        <option value="msd80">N54 — MSD80 / MSD81 (2007–2010)</option>
+        <option value="auto">Auto-detect</option>
+        <option value="mevd17">N55 — MEVD17.2 (2011–2013)</option>
+        <option value="obd">Standard OBD2 only</option>
+      </select>
+      <p class="hint">BMW mode reads the DME directly over D-CAN, the way MHD and bootmod3 do, and bundles every gauge into one request. If the adapter can't do it, the app falls back to standard OBD2.</p>
+    </fieldset>
+    <fieldset><legend>Units</legend>
+      <label><input type="radio" name="units" value="imperial"> psi / °F / mph</label>
+      <label><input type="radio" name="units" value="metric"> bar / °C / km/h</label>
+    </fieldset>
+    <fieldset><legend>Mixture display</legend>
+      <label><input type="radio" name="afr" value="afr"> AFR (gas)</label>
+      <label><input type="radio" name="afr" value="lambda"> Lambda</label>
+    </fieldset>
+    <fieldset><legend>Shift light &amp; adapter</legend>
+      <label>Shift at <input type="number" name="shiftRpm" min="2000" max="8000" step="100"> rpm</label>
+      <label>USB baud <select name="baud">
+        <option>38400</option><option>115200</option><option>9600</option><option>500000</option>
+      </select></label>
+    </fieldset>
+    <fieldset><legend>Gauges (first two shown large)</legend>
+      <div class="grid2" id="gaugeChecks"></div>
+    </fieldset>
+    <div class="row"><button value="cancel">Cancel</button><button value="ok" class="active">Save</button></div>
+  </form>
+</dialog>
+<dialog id="pick">
+  <form method="dialog">
+    <h2>CONNECT</h2>
+    <button type="button" class="choice" value="ble">Bluetooth<small>BLE adapter: OBDLink CX, Vgate iCar Pro, Veepeak BLE…</small></button>
+    <button type="button" class="choice" value="serial">USB / COM port<small>USB cable, or a classic Bluetooth adapter paired to this computer</small></button>
+    <p class="hint">Ignition on, adapter plugged into the OBD port under the dash.</p>
+    <div class="row"><button value="cancel">Cancel</button></div>
+  </form>
+</dialog>
+<div id="toast"></div>
+
+<script>
+'use strict';
+// ---------- settings ----------
+const ALL_GAUGES = ['boost','rpm','afr','coolant','iat','oil','lpfp','rail','wgdc','timing','volts','throttle','load','speed','stft','ltft'];
+const DEFAULTS = { units: 'imperial', afr: 'afr', shiftRpm: 6800, baud: 38400, dme: 'msd80',   // 2007 E92 335i = N54 / MSD80
+  visible: ['boost','rpm','afr','iat','oil','coolant','lpfp','timing','wgdc','volts'] };
+let S = { ...DEFAULTS };
+try { Object.assign(S, JSON.parse(localStorage.getItem('e92gauges') || '{}')); } catch {}
+const saveSettings = () => { try { localStorage.setItem('e92gauges', JSON.stringify(S)); } catch {} };
+
+// ---------- live data ----------
+// Every source (BMW DME, standard OBD2, demo) writes metric values into V:
+// map / mapTarget / baro in kPa absolute, lpfp / rail in bar, temps in °C, speed in km/h.
+const V = {};
+let provided = new Set();   // keys the current source can supply; gauges needing others show N/A
+
+const hex = bytes => bytes.map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+
+// ---------- BMW DME channel tables ----------
+// IDs and scaling come from BMW's own EDIABAS descriptions (msd80.prg / mevd172.prg measurement tables).
+// value = raw * mul + add; size in bytes, big-endian. "fast" channels matter only in one-at-a-time mode.
+const ch = (key, id, size, mul, add = 0, opts = {}) => ({ key, id, size, mul, add, ...opts });
+const PROFILES = {
+  msd80: { name: 'N54 MSD80', proto: 'kwp', channels: [
+    ch('rpm',          0x4807, 2, 1, 0, { fast: true }),
+    ch('map',          0x5A2C, 2, 0.00390625, 0, { fast: true }),       // pressure before throttle = boost, hPa → kPa
+    ch('mapTarget',    0x5AB0, 2, 0.00390625, 0, { fast: true }),
+    ch('baro',         0x4201, 2, 0.008291752636),
+    ch('tps',          0x480B, 1, 0.390625, 0, { fast: true }),          // accelerator pedal
+    ch('timing',       0x5A49, 1, 0.375, -35.625, { fast: true }),       // ignition angle, cylinder 1
+    ch('lambda',       0x5A50, 2, 1 / 1024, 0, { fast: true }),
+    ch('lambdaTarget', 0x4704, 2, 1 / 1024, 0, { fast: true }),
+    ch('wgdc',         0x5AAB, 2, 0.00152587890625, 0, { fast: true }),
+    ch('lpfp',         0x5A2E, 2, 0.0026533608, 0, { fast: true }),      // low-pressure fuel, hPa → bar
+    ch('rail',         0x5A2F, 2, 0.0053067217, 0, { fast: true }),      // high-pressure rail, hPa → bar
+    ch('load',         0x5A4B, 1, 0.390625),
+    ch('ect',          0x581F, 1, 0.75, -48),
+    ch('iat',          0x5A2B, 2, 0.1, 0, { signed: true }),             // charge air after the intercooler
+    ch('oil',          0x4402, 2, 0.1, 0, { signed: true }),
+    ch('speed',        0x580D, 1, 1),
+    ch('gear',         0x5881, 1, 1),
+    ch('stft',         0x5806, 1, 0.78125, -100),
+    ch('ltft',         0x5807, 1, 0.78125, -100),
+    ch('volts',        0x460A, 2, 0.015),
+  ]},
+  mevd17: { name: 'N55 MEVD17', proto: 'uds', channels: [
+    ch('rpm',          0x4807, 2, 0.25, 0, { fast: true }),
+    ch('map',          0x4205, 2, 0.0078125, 0, { fast: true }),
+    ch('mapTarget',    0x4AB0, 2, 0.00390625, 0, { fast: true }),
+    ch('baro',         0x4201, 2, 0.00390625),
+    ch('tps',          0x480B, 2, 0.0015259, 0, { fast: true }),
+    ch('timing',       0x4A49, 2, 0.1, 0, { fast: true, signed: true }),
+    ch('lambda',       0x4A50, 2, 0.00024414, 0, { fast: true }),
+    ch('lambdaTarget', 0x4704, 2, 0.00024414, 0, { fast: true }),
+    ch('lpfp',         0x58F3, 2, 0.001, 0, { fast: true }),             // kPa*0.1 → bar
+    ch('rail',         0x58EF, 2, 0.005, 0, { fast: true }),             // MPa*0.0005 → bar
+    ch('ect',          0x4300, 1, 0.75, -48),
+    ch('iat',          0x580F, 1, 0.75, -48),
+    ch('oil',          0x4402, 2, 0.75, -48),
+    ch('speed',        0x580D, 1, 1.25),
+    ch('gear',         0x5881, 1, 1),
+    ch('ltft',         0x5807, 2, 0.00003052, 0, { post: f => (f - 1) * 100 }),
+    ch('volts',        0x460A, 2, 0.015),
+  ]},
+};
+
+function decode(c, b, i) {
+  let v = 0;
+  for (let k = 0; k < c.size; k++) v = v * 256 + b[i + k];
+  if (c.signed && v >= 2 ** (c.size * 8 - 1)) v -= 2 ** (c.size * 8);
+  v = v * c.mul + c.add;
+  return c.post ? c.post(v) : v;
+}
+
+// ---------- standard OBD2 (fallback) ----------
+const OBD_PIDS = {
+  0x0C: { key: 'rpm',          len: 2, fast: true, f: b => (b[0] * 256 + b[1]) / 4 },
+  0x0B: { key: 'map',          len: 1, fast: true, f: b => b[0] },
+  0x11: { key: 'tps',          len: 1, fast: true, f: b => b[0] * 100 / 255 },
+  0x0E: { key: 'timing',       len: 1, fast: true, f: b => b[0] / 2 - 64 },
+  0x24: { key: 'lambda',       len: 4, fast: true, f: b => (b[0] * 256 + b[1]) * 2 / 65536 },
+  0x34: { key: 'lambda',       len: 4, fast: true, f: b => (b[0] * 256 + b[1]) / 32768 },
+  0x44: { key: 'lambdaTarget', len: 2, fast: true, f: b => (b[0] * 256 + b[1]) / 32768 },
+  0x04: { key: 'load',         len: 1, fast: true, f: b => b[0] * 100 / 255 },
+  0x23: { key: 'rail',         len: 2, f: b => (b[0] * 256 + b[1]) * 0.1 },
+  0x33: { key: 'baro',         len: 1, f: b => b[0] },
+  0x05: { key: 'ect',          len: 1, f: b => b[0] - 40 },
+  0x0F: { key: 'iat',          len: 1, f: b => b[0] - 40 },
+  0x5C: { key: 'oil',          len: 1, f: b => b[0] - 40 },
+  0x0D: { key: 'speed',        len: 1, f: b => b[0] },
+  0x06: { key: 'stft',         len: 1, f: b => (b[0] - 128) * 100 / 128 },
+  0x07: { key: 'ltft',         len: 1, f: b => (b[0] - 128) * 100 / 128 },
+  0x42: { key: 'volts',        len: 2, f: b => (b[0] * 256 + b[1]) / 1000 },
+};
+
+// ELM output (headers off) → bytes, joining multi-frame lines like "00E", "0:410C…", "1:…"
+function obdBytes(resp) {
+  let s = '';
+  for (let l of resp.split(/[\r\n]+/)) {
+    l = l.replace(/\s/g, '').toUpperCase();
+    if (/^[0-9A-F]{3}$/.test(l)) continue;
+    l = l.replace(/^[0-9A-F]:/, '');
+    if (/^[0-9A-F]+$/.test(l)) s += l;
+  }
+  return (s.match(/../g) || []).map(h => parseInt(h, 16));
+}
+
+function parseOBD(b) {
+  if (b[0] !== 0x41) return false;
+  for (let i = 1; i < b.length;) {
+    const p = OBD_PIDS[b[i]];
+    if (!p || i + p.len >= b.length) break;
+    V[p.key] = p.f(b.slice(i + 1, i + 1 + p.len));
+    i += 1 + p.len;
+  }
+  return true;
+}
+
+// ---------- gauge definitions ----------
+const cToF = c => c * 9 / 5 + 32;
+function gaugeDefs() {
+  const imp = S.units === 'imperial';
+  const temp = (label, src, cMin, cMax, cWarn, opts = {}) => imp
+    ? { label, unit: '°F', min: Math.round(cToF(cMin) / 10) * 10, max: Math.round(cToF(cMax) / 10) * 10, major: opts.fMajor || 40, minor: 10, dec: 0,
+        zones: [[cToF(cWarn), cToF(cMax)]], warn: v => v >= cToF(cWarn), src: [src], calc: s => s[src] == null ? null : cToF(s[src]) }
+    : { label, unit: '°C', min: cMin, max: cMax, major: opts.cMajor || 20, minor: 5, dec: 0,
+        zones: [[cWarn, cMax]], warn: v => v >= cWarn, src: [src], calc: s => s[src] };
+  const boost = (s, k) => s[k] == null ? null : (s[k] - (s.baro ?? 101.3)) * (imp ? 0.145038 : 0.01);
+  const mix = v => v == null ? null : S.afr === 'afr' ? v * 14.7 : v;
+  const running = s => s.rpm > 500;
+  return {
+    boost: { label: 'BOOST', unit: imp ? 'PSI' : 'BAR', src: ['map'], calc: s => boost(s, 'map'), target: s => boost(s, 'mapTarget'),
+      ...(imp ? { min: -15, max: 25, major: 5, minor: 1, dec: 1, zones: [[21, 25]], warn: v => v > 21 }
+              : { min: -1, max: 1.75, major: 0.5, minor: 0.1, dec: 2, zones: [[1.45, 1.75]], warn: v => v > 1.45 }) },
+    rpm: { label: 'RPM', unit: 'x1000 RPM', min: 0, max: 8000, major: 1000, minor: 250, dec: 0, labelDiv: 1000, round: 10,
+           zones: [[7000, 8000]], warn: v => v >= 7000, src: ['rpm'], calc: s => s.rpm,
+           sub: s => s.gear >= 1 && s.gear <= 7 ? `x1000 · GEAR ${s.gear}` : null },
+    afr: { label: S.afr === 'afr' ? 'AFR' : 'LAMBDA', unit: S.afr === 'afr' ? 'GAS' : 'λ', zones: [], noPeak: true,
+           src: ['lambda'], calc: s => mix(s.lambda), target: s => mix(s.lambdaTarget),
+           ...(S.afr === 'afr' ? { min: 10, max: 20, major: 2, minor: 0.5, dec: 1 } : { min: 0.7, max: 1.3, major: 0.1, minor: 0.05, dec: 2 }) },
+    coolant: temp('COOLANT', 'ect', 40, 130, 118),
+    iat:     temp('CHARGE AIR', 'iat', -20, 80, 55, { fMajor: 30, cMajor: 20 }),
+    oil:     temp('OIL', 'oil', 40, 160, 140, { fMajor: 50, cMajor: 30 }),
+    lpfp: imp
+      ? { label: 'FUEL LP', unit: 'PSI', min: 0, max: 100, major: 20, minor: 5, dec: 0, zones: [[0, 45]], noPeak: true,
+          warn: (v, s) => running(s) && v < 45, src: ['lpfp'], calc: s => s.lpfp == null ? null : s.lpfp * 14.5038 }
+      : { label: 'FUEL LP', unit: 'BAR', min: 0, max: 7, major: 1, minor: 0.25, dec: 1, zones: [[0, 3.1]], noPeak: true,
+          warn: (v, s) => running(s) && v < 3.1, src: ['lpfp'], calc: s => s.lpfp },
+    rail: imp
+      ? { label: 'RAIL', unit: 'x100 PSI', min: 0, max: 3600, major: 600, minor: 150, dec: 0, labelDiv: 100, round: 10, zones: [[0, 725]], noPeak: true,
+          warn: (v, s) => running(s) && v < 725, src: ['rail'], calc: s => s.rail == null ? null : s.rail * 14.5038 }
+      : { label: 'RAIL', unit: 'BAR', min: 0, max: 250, major: 50, minor: 10, dec: 0, zones: [[0, 50]], noPeak: true,
+          warn: (v, s) => running(s) && v < 50, src: ['rail'], calc: s => s.rail },
+    wgdc:    { label: 'WGDC', unit: '%', min: 0, max: 100, major: 20, minor: 5, dec: 0, zones: [], src: ['wgdc'], calc: s => s.wgdc },
+    timing:  { label: 'TIMING', unit: '° BTDC', min: -10, max: 30, major: 10, minor: 2, dec: 1, zones: [], src: ['timing'], calc: s => s.timing },
+    volts:   { label: 'BATTERY', unit: 'VOLTS', min: 10, max: 16, major: 1, minor: 0.25, dec: 1, zones: [[10, 11.8], [15.2, 16]],
+               warn: v => v < 11.8 || v > 15.2, noPeak: true, src: ['volts'], calc: s => s.volts },
+    throttle:{ label: 'PEDAL', unit: '%', min: 0, max: 100, major: 20, minor: 5, dec: 0, zones: [], noPeak: true, src: ['tps'], calc: s => s.tps },
+    load:    { label: 'LOAD', unit: '%', min: 0, max: 100, major: 20, minor: 5, dec: 0, zones: [], src: ['load'], calc: s => s.load },
+    speed: imp
+      ? { label: 'SPEED', unit: 'MPH', min: 0, max: 160, major: 20, minor: 5, dec: 0, zones: [], src: ['speed'], calc: s => s.speed == null ? null : s.speed * 0.621371 }
+      : { label: 'SPEED', unit: 'KM/H', min: 0, max: 260, major: 40, minor: 10, dec: 0, zones: [], src: ['speed'], calc: s => s.speed },
+    stft: { label: 'STFT', unit: '%', min: -25, max: 25, major: 10, minor: 2.5, dec: 1, zones: [], noPeak: true, src: ['stft'], calc: s => s.stft },
+    ltft: { label: 'LTFT', unit: '%', min: -25, max: 25, major: 10, minor: 2.5, dec: 1, zones: [[-25, -12], [12, 25]],
+            warn: v => Math.abs(v) > 12, noPeak: true, src: ['ltft'], calc: s => s.ltft },
+  };
+}
+
+// ---------- SVG gauge ----------
+const A0 = 135, SWEEP = 270;
+const polar = (a, r) => { const t = a * Math.PI / 180; return [100 + r * Math.cos(t), 100 + r * Math.sin(t)]; };
+const arc = (a1, a2, r) => { const [x1, y1] = polar(a1, r), [x2, y2] = polar(a2, r);
+  return `M${x1.toFixed(2)} ${y1.toFixed(2)} A${r} ${r} 0 ${a2 - a1 > 180 ? 1 : 0} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`; };
+const angleOf = (d, v) => A0 + SWEEP * Math.min(1, Math.max(0, (v - d.min) / (d.max - d.min)));
+
+function gaugeSVG(d) {
+  let s = `<svg viewBox="0 0 200 200"><path class="track" d="${arc(A0, A0 + SWEEP, 88)}"/>`;
+  for (const [from, to] of d.zones) s += `<path class="zone red" d="${arc(angleOf(d, from), angleOf(d, to), 86)}"/>`;
+  const n = Math.round((d.max - d.min) / d.minor);
+  const perMajor = Math.round(d.major / d.minor);
+  for (let i = 0; i <= n; i++) {
+    const v = d.min + i * d.minor, a = angleOf(d, v), major = i % perMajor === 0;
+    const [x1, y1] = polar(a, 84), [x2, y2] = polar(a, major ? 74 : 79);
+    s += `<line class="tick${major ? ' major' : ''}" x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}"/>`;
+    if (major) {
+      const [lx, ly] = polar(a, 63);
+      const lv = d.labelDiv ? v / d.labelDiv : v;
+      s += `<text class="tlabel" x="${lx.toFixed(2)}" y="${ly.toFixed(2)}">${+lv.toFixed(2)}</text>`;
+    }
+  }
+  s += `<g class="peak" style="transform:rotate(${A0}deg)"><path d="M191 100 L199 95 L199 105 Z"/></g>
+    <g class="tgt off" style="transform:rotate(${A0}deg)"><path d="M174 98 h16 v4 h-16 Z"/></g>
+    <g class="needle" style="transform:rotate(${A0}deg)"><path d="M82 100 L100 96.5 L178 100 L100 103.5 Z"/></g>
+    <circle class="hub" cx="100" cy="100" r="8"/>
+    <text class="lbl" x="100" y="72">${d.label}</text>
+    <text class="val" x="100" y="148">--</text>
+    <text class="unit" x="100" y="163">${d.unit}</text>
+    <text class="pk" x="100" y="186"></text></svg>`;
+  return s;
+}
+
+let defs = {}, G = {}, peaks = {};
+function buildGauges() {
+  defs = gaugeDefs(); G = {}; peaks = {};
+  const big = document.getElementById('big'), small = document.getElementById('small');
+  big.innerHTML = small.innerHTML = '';
+  S.visible.filter(id => defs[id]).forEach((id, i) => {
+    const el = document.createElement('div');
+    el.className = 'gauge'; el.innerHTML = gaugeSVG(defs[id]);
+    (i < 2 ? big : small).appendChild(el);
+    G[id] = { el, needle: el.querySelector('.needle'), peak: el.querySelector('.peak'), tgt: el.querySelector('.tgt'),
+              val: el.querySelector('.val'), unit: el.querySelector('.unit'), pk: el.querySelector('.pk'), last: null };
+  });
+  document.getElementById('shift').innerHTML = '<i></i>'.repeat(10);
+}
+
+function resetPeaks() {
+  peaks = {};
+  for (const id in G) { G[id].pk.textContent = ''; G[id].peak.style.transform = `rotate(${A0}deg)`; G[id].last = null; }
+}
+
+function fmt(d, v) { if (d.round) v = Math.round(v / d.round) * d.round; return v.toFixed(d.dec); }
+
+function render() {
+  for (const id in G) {
+    const d = defs[id], g = G[id];
+    const v = d.calc(V);
+    g.el.classList.toggle('na', v == null);
+    if (v == null) {
+      g.val.textContent = mode && d.src.some(k => !provided.has(k)) ? 'N/A' : '--';
+      g.el.classList.remove('warn'); g.tgt.classList.add('off'); g.last = null;
+      continue;
+    }
+    const t = d.target && d.target(V);
+    g.tgt.classList.toggle('off', t == null);
+    if (t != null) g.tgt.style.transform = `rotate(${angleOf(d, t)}deg)`;
+    if (d.sub) g.unit.textContent = d.sub(V) || d.unit;
+    if (v === g.last) continue;
+    g.last = v;
+    g.needle.style.transform = `rotate(${angleOf(d, v)}deg)`;
+    g.val.textContent = fmt(d, v);
+    g.el.classList.toggle('warn', !!(d.warn && d.warn(v, V)));
+    if (!d.noPeak && (peaks[id] == null || v > peaks[id])) {
+      peaks[id] = v;
+      g.peak.style.transform = `rotate(${angleOf(d, v)}deg)`;
+      g.pk.textContent = 'PEAK ' + fmt(d, v);
+    }
+  }
+  // shift light: fills over the last 1500 rpm before the shift point
+  const shift = document.getElementById('shift'), leds = shift.children, rpm = V.rpm || 0;
+  const lit = Math.max(0, Math.min(10, Math.ceil((rpm - (S.shiftRpm - 1500)) / 150)));
+  shift.classList.toggle('flash', rpm >= S.shiftRpm);
+  for (let i = 0; i < leds.length; i++) leds[i].className = i < lit ? (i < 5 ? 'g' : i < 8 ? 'y' : 'r') : '';
+}
+
+// ---------- transports ----------
+const enc = new TextEncoder(), dec = new TextDecoder();
+
+async function bleTransport() {
+  if (!navigator.bluetooth) throw new Error('Web Bluetooth not available. Use Chrome on Android, Windows or Mac (not iPhone).');
+  const SERVICES = [0xfff0, 0xffe0, 0x18f0, 0xffe5, 'e7810a71-73ae-499d-8c15-faa9aef0c3f2'];
+  const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: SERVICES });
+  setStatus('Connecting to ' + (device.name || 'adapter') + '…', 'busy');
+  const server = await device.gatt.connect();
+  let rx, tx;
+  for (const uuid of SERVICES) {
+    try {
+      const chars = await (await server.getPrimaryService(uuid)).getCharacteristics();
+      rx = chars.find(c => c.properties.notify || c.properties.indicate);
+      tx = chars.find(c => c.properties.writeWithoutResponse || c.properties.write);
+      if (rx && tx) break;
+    } catch {}
+  }
+  if (!rx || !tx) { device.gatt.disconnect(); throw new Error("That device doesn't look like a BLE OBD2 adapter."); }
+  const t = { onData: () => {}, onClose: () => {} };
+  await rx.startNotifications();
+  rx.addEventListener('characteristicvaluechanged', e => t.onData(dec.decode(e.target.value)));
+  device.addEventListener('gattserverdisconnected', () => t.onClose());
+  let chain = Promise.resolve();
+  t.write = str => {
+    const bytes = enc.encode(str);
+    for (let i = 0; i < bytes.length; i += 20) {
+      const chunk = bytes.slice(i, i + 20);
+      chain = chain.then(() => tx.properties.writeWithoutResponse ? tx.writeValueWithoutResponse(chunk) : tx.writeValue(chunk));
+    }
+    return chain;
+  };
+  t.close = () => device.gatt.disconnect();
+  return t;
+}
+
+async function serialTransport() {
+  if (!navigator.serial) throw new Error('Web Serial not available. Use Chrome or Edge on a computer.');
+  const port = await navigator.serial.requestPort();
+  await port.open({ baudRate: +S.baud });
+  const writer = port.writable.getWriter(), reader = port.readable.getReader();
+  const t = { onData: () => {}, onClose: () => {}, write: s => writer.write(enc.encode(s)) };
+  let open = true;
+  (async () => {
+    try { while (open) { const { value, done } = await reader.read(); if (done) break; t.onData(dec.decode(value)); } }
+    catch {} finally { if (open) t.onClose(); }
+  })();
+  t.close = async () => { open = false; try { await reader.cancel(); reader.releaseLock(); writer.releaseLock(); await port.close(); } catch {} };
+  return t;
+}
+
+const TRANSPORTS = { ble: bleTransport, serial: serialTransport };
+
+// ---------- ELM327 ----------
+class ELM {
+  constructor(t) {
+    this.t = t; this.buf = ''; this.pending = null;
+    t.onData = s => {
+      this.buf += s;
+      const i = this.buf.indexOf('>');
+      if (i < 0) return;
+      const resp = this.buf.slice(0, i); this.buf = this.buf.slice(i + 1);
+      if (this.pending) { const p = this.pending; this.pending = null; clearTimeout(p.timer); p.resolve(resp); }
+    };
+  }
+  cmd(c, timeout = 1500) {
+    return new Promise((resolve, reject) => {
+      this.buf = '';
+      this.pending = { resolve, timer: setTimeout(() => { this.pending = null; this.buf = ''; reject(new Error('timeout')); }, timeout) };
+      this.t.write(c + '\r');
+    });
+  }
+  async reset() { try { await this.cmd('ATZ', 3000); } catch { await this.cmd('ATZ', 3000); } }
+}
+
+// ---------- BMW D-CAN (what MHD / bootmod3 / INPA speak) ----------
+// Tester 0x6F1 talks to the DME 0x612 on 500k CAN, with 0x12 as an ISO-TP extended address.
+const isPos = m => !!m && m[0] !== 0x7F;
+
+class BMW {
+  constructor(elm) { this.elm = elm; this.segTx = false; }
+
+  async init() {
+    for (const c of ['ATE0', 'ATL0', 'ATS0', 'ATH1', 'ATAL', 'ATPBE101', 'ATSPB', 'ATBI', 'ATSH6F1', 'ATCRA612',
+                     'ATCEA12', 'ATFCSH6F1', 'ATFCSD12300002', 'ATFCSM1', 'ATCAF1', 'ATAT1'])
+      if ((await this.elm.cmd(c)).includes('?')) return false;
+    // OBDLink (STN chip) adapters can send multi-frame requests on their own
+    this.segTx = !(await this.elm.cmd('STCSEGT1').catch(() => '?')).includes('?');
+    return true;
+  }
+
+  // ELM lines (headers on) → reassembled ISO-TP messages from the DME; flow-control frames come back as {fc}
+  static frames(resp) {
+    const msgs = []; let buf = null, need = 0;
+    for (let line of resp.split(/[\r\n]+/)) {
+      line = line.replace(/\s/g, '').toUpperCase();
+      if (!/^612([0-9A-F]{2})+$/.test(line)) continue;
+      let b = line.slice(3).match(/../g).map(h => parseInt(h, 16));
+      if (b[0] === 0xF1) b = b.slice(1);   // extended address of the tester
+      const type = b[0] >> 4;
+      if (type === 0) msgs.push(b.slice(1, 1 + (b[0] & 15)));
+      else if (type === 1) { need = ((b[0] & 15) << 8) | b[1]; buf = b.slice(2); }
+      else if (type === 2 && buf) { buf.push(...b.slice(1)); if (buf.length >= need) { msgs.push(buf.slice(0, need)); buf = null; } }
+      else if (type === 3) msgs.push({ fc: b });
+    }
+    return msgs;
+  }
+
+  // Send one diagnostic request; returns the positive or negative response, or null when nothing answered.
+  async request(bytes, timeout = 1500) {
+    const resp = bytes.length <= 6 || this.segTx ? await this.elm.cmd(hex(bytes), timeout) : await this.sendSegmented(bytes, timeout);
+    for (const m of BMW.frames(resp)) {
+      if (!Array.isArray(m)) continue;
+      if (m[0] === bytes[0] + 0x40) return m;
+      if (m[0] === 0x7F && m[1] === bytes[0] && m[2] !== 0x78) return m;   // 0x78 = "still working"
+    }
+    return null;
+  }
+
+  // A plain ELM327 can't send multi-frame messages, so build the ISO-TP frames by hand.
+  async sendSegmented(bytes, timeout) {
+    const e = this.elm, n = bytes.length;
+    await e.cmd('ATCAF0'); await e.cmd('ATCEA');
+    try {
+      const ff = BMW.frames(await e.cmd(hex([0x12, 0x10 | (n >> 8), n & 255, ...bytes.slice(0, 5)]), timeout)).find(m => m.fc);
+      if (!ff || (ff.fc[0] & 15) !== 0) return '';
+      const cfs = [];
+      for (let i = 5, seq = 1; i < n; i += 6, seq++) {
+        const f = [0x12, 0x20 | (seq & 15), ...bytes.slice(i, i + 6)];
+        while (f.length < 8) f.push(0);
+        cfs.push(f);
+      }
+      let out = '';
+      if (cfs.length > 1) await e.cmd('ATR0');   // don't wait for replies between consecutive frames
+      for (let i = 0; i < cfs.length; i++) {
+        if (i === cfs.length - 1 && cfs.length > 1) await e.cmd('ATR1');
+        out = await e.cmd(hex(cfs[i]), timeout);
+      }
+      return out;
+    } finally { await e.cmd('ATCAF1'); await e.cmd('ATCEA12'); }
+  }
+
+  // Bundle every channel into one dynamically defined identifier, so each poll is a single request.
+  // Falls back to reading channels one at a time. Returns null if the DME gives us nothing.
+  async setup(profile) {
+    const C = profile.channels;
+    const size = list => list.reduce((n, c) => n + c.size, 0);
+    const tryBlock = async (clear, defineReq, read, skip) => {
+      if (!isPos(await this.request(clear))) return null;
+      const defined = [];
+      for (const c of C) if (isPos(await this.request(defineReq(c, size(defined) + 1)))) defined.push(c);
+      if (!defined.length) return null;
+      const m = await this.request(read);
+      return isPos(m) && m.length - skip === size(defined) ? { mode: 'block', read, skip, chans: defined } : null;
+    };
+    let s = null;
+    if (profile.proto === 'kwp') {
+      // KWP2000 $2C DynamicallyDefineLocalIdentifier F0, read back with $21 F0.
+      // BMW's record layout isn't published, so try the short form, then the ISO 14230 form.
+      s = await tryBlock([0x2C, 0xF0, 0x04], c => [0x2C, 0xF0, 0x02, c.id >> 8, c.id & 255], [0x21, 0xF0], 2)
+       || await tryBlock([0x2C, 0xF0, 0x04], (c, pos) => [0x2C, 0xF0, 0x02, pos, c.size, c.id >> 8, c.id & 255, 0x01], [0x21, 0xF0], 2);
+    } else {
+      // UDS $2C DynamicallyDefineDataIdentifier F300, read back with $22 F300
+      s = await tryBlock([0x2C, 0x03, 0xF3, 0x00], c => [0x2C, 0x01, 0xF3, 0x00, c.id >> 8, c.id & 255, 0x01, c.size], [0x22, 0xF3, 0x00], 3);
+    }
+    if (s) return s;
+    const single = [];
+    for (const c of C) {
+      const m = await this.request([0x22, c.id >> 8, c.id & 255]);
+      if (isPos(m) && m.length - 3 === c.size) single.push(c);
+    }
+    return single.length ? { mode: 'single', chans: single } : null;
+  }
+}
+
+async function detectDME(bmw) {
+  if (isPos(await bmw.request([0x22, 0x5A, 0x2C]))) return 'msd80';   // boost sensor ID only the MSD8x has
+  if (isPos(await bmw.request([0x22, 0x4A, 0xB0]))) return 'mevd17';  // boost target ID only the MEVD17 has
+  return isPos(await bmw.request([0x2C, 0xF0, 0x04])) ? 'msd80' : 'mevd17';
+}
+
+async function connectBMW(elm) {
+  const bmw = new BMW(elm);
+  if (!await bmw.init()) return null;
+  if (!await bmw.request([0x22, 0x48, 0x07])) return null;   // nobody answered on BMW addressing
+  const key = S.dme === 'auto' ? await detectDME(bmw) : S.dme;
+  const profile = PROFILES[key];
+  setStatus(`Setting up ${profile.name}…`, 'busy');
+  let s = await bmw.setup(profile);
+  if (!s) return null;
+  let slow = 0;
+  return {
+    label: `BMW ${profile.name}${s.mode === 'block' ? '' : ' (slow)'}`,
+    keys: new Set(s.chans.map(c => c.key)),
+    async poll() {
+      if (s.mode === 'block') {
+        const m = await bmw.request(s.read);
+        if (!m) return false;
+        if (m[0] === 0x7F) { s = await bmw.setup(profile) || s; return false; }   // block was lost (DME reset): define again
+        let i = s.skip;
+        for (const c of s.chans) { V[c.key] = decode(c, m, i); i += c.size; }
+        return true;
+      }
+      const fast = s.chans.filter(c => c.fast), rest = s.chans.filter(c => !c.fast);
+      let ok = false;
+      for (const c of rest.length ? [...fast, rest[slow++ % rest.length]] : fast) {
+        const m = await bmw.request([0x22, c.id >> 8, c.id & 255]);
+        if (isPos(m)) { V[c.key] = decode(c, m, 3); ok = true; }
+      }
+      return ok;
+    },
+  };
+}
+
+async function connectOBD(elm) {
+  for (const c of ['ATE0', 'ATL0', 'ATS0', 'ATH0', 'ATAT2', 'ATSP0']) await elm.cmd(c);
+  const first = obdBytes(await elm.cmd('0100', 8000).catch(() => ''));
+  if (first[0] !== 0x41) throw new Error("Adapter OK but the car didn't answer. Is the ignition on?");
+  const proto = (await elm.cmd('ATDPN')).replace(/[^0-9A-F]/gi, '').slice(-1);
+  const can = '6789'.includes(proto);
+  if (proto === '6' || proto === '8') { await elm.cmd('ATSH7E0'); await elm.cmd('ATCRA7E8'); }   // ask the DME only
+  const sup = new Set();
+  for (let base = 0; base <= 0x40; base += 0x20) {
+    const b = obdBytes(await elm.cmd('01' + hex([base])));
+    if (b[0] !== 0x41 || b[1] !== base) break;
+    for (let i = 0; i < 32; i++) if (b[2 + (i >> 3)] & (0x80 >> (i & 7))) sup.add(base + i + 1);
+    if (!sup.has(base + 0x20)) break;
+  }
+  let pids = Object.keys(OBD_PIDS).map(Number).filter(p => sup.has(p));
+  if (pids.includes(0x24)) pids = pids.filter(p => p !== 0x34);
+  // CAN lets one request carry up to six PIDs
+  const per = can ? 6 : 1;
+  const chunk = list => { const out = []; for (let i = 0; i < list.length; i += per) out.push(list.slice(i, i + per)); return out; };
+  const fast = chunk(pids.filter(p => OBD_PIDS[p].fast)), slow = chunk(pids.filter(p => !OBD_PIDS[p].fast));
+  const atrv = !pids.includes(0x42);
+  const keys = new Set(pids.map(p => OBD_PIDS[p].key));
+  if (atrv) keys.add('volts');
+  let n = 0;
+  return {
+    label: 'Standard OBD2', keys,
+    async poll() {
+      let ok = false;
+      for (const c of slow.length ? [...fast, slow[n % slow.length]] : fast)
+        ok = parseOBD(obdBytes(await elm.cmd('01' + hex(c)))) || ok;
+      if (atrv && n % 10 === 0) { const v = parseFloat((await elm.cmd('ATRV')).replace(/[^\d.]/g, '')); if (!isNaN(v)) V.volts = v; }
+      n++;
+      return ok;
+    },
+  };
+}
+
+// ---------- connection & polling ----------
+let transport = null, elm = null, link = null, running = false, mode = null, demoTimer = null, connecting = false, session = 0;
+let hzCount = 0, hzT = performance.now();
+
+async function pollLoop(id) {
+  const live = () => running && id === session;   // a stale loop from an old connection must stop
+  let misses = 0;
+  while (live()) {
+    let ok = false;
+    try { ok = await link.poll(); } catch {}
+    if (!live()) return;
+    if (ok) misses = 0;
+    else if (++misses > 8) { disconnect('Lost connection to the car.'); return; }
+    hzCount++;
+    logRow();
+    const now = performance.now();
+    if (now - hzT > 1000) {
+      const hz = hzCount * 1000 / (now - hzT);
+      setStatus(`${link.label} · ${hz.toFixed(1)} Hz`, 'on');
+      document.documentElement.style.setProperty('--nt', Math.round(Math.min(160, Math.max(40, 900 / Math.max(hz, 1)))) + 'ms');
+      hzCount = 0; hzT = now;
+    }
+  }
+}
+
+async function connect(kind) {
+  if (mode) disconnect();
+  connecting = true; updateButtons();
+  try {
+    setStatus('Connecting…', 'busy');
+    transport = await TRANSPORTS[kind]();
+    transport.onClose = () => running && disconnect('Adapter disconnected.');
+    elm = new ELM(transport);
+    await elm.reset();
+    setStatus('Talking to DME…', 'busy');
+    link = S.dme === 'obd' ? null : await connectBMW(elm).catch(() => null);
+    if (!link) { await elm.reset(); link = await connectOBD(elm); }
+    for (const k in V) delete V[k];
+    provided = link.keys;
+    mode = kind; running = true;
+    S.lastConn = kind; saveSettings();
+    resetPeaks(); keepAwake();
+    hzCount = 0; hzT = performance.now();
+    setStatus(link.label, 'on');
+    pollLoop(++session);
+  } catch (e) {
+    if (transport) try { transport.close(); } catch {}
+    transport = null; elm = null; link = null;
+    setStatus('Disconnected', '');
+    if (e.name !== 'NotFoundError') toast(e.message); // NotFoundError = user closed the device picker
+  } finally {
+    connecting = false; updateButtons();
+  }
+}
+
+// Resets state synchronously so a new connection or demo can start right away.
+async function disconnect(msg) {
+  running = false;
+  if (demoTimer) { clearInterval(demoTimer); demoTimer = null; }
+  const t = transport;
+  transport = null; elm = null; link = null; mode = null;
+  for (const k in V) delete V[k];
+  provided = new Set();
+  updateButtons(); setStatus('Disconnected', '');
+  document.documentElement.style.removeProperty('--nt');
+  if (msg) toast(msg);
+  if (t) try { await t.close(); } catch {}
+}
+
+// ---------- demo ----------
+function startDemo() {
+  if (mode) { const was = mode; disconnect(); if (was === 'demo') return; }
+  mode = 'demo'; provided = new Set(LOG_COLS.map(c => c[0])); updateButtons(); setStatus('Demo mode', 'on'); keepAwake();
+  let t = 0, rpm = 900, boost = -9, ect = 88, gear = 2;
+  const nz = a => (Math.random() - 0.5) * a;
+  demoTimer = setInterval(() => {
+    t += 0.05;
+    const ph = t % 14;
+    let tps, target, lam, tim, wg;
+    if (ph < 3)       { tps = 0;  rpm += (850 - rpm) * 0.08; target = -10; lam = 1.0; tim = 12; wg = 0; gear = 2; }    // idle
+    else if (ph < 5)  { tps = 18; rpm += (2200 - rpm) * 0.05; target = -6; lam = 1.0; tim = 30; wg = 8; }               // cruise
+    else if (ph < 10) { tps = 100; rpm = Math.min(6900, rpm + (ph < 7.5 ? 520 : 480) * 0.05 / (gear * 0.6));             // pull
+                        target = rpm > 3000 ? 16.5 + Math.sin(t * 3) * 0.6 : Math.max(0, (rpm - 2200) / 50); lam = 0.79; tim = 6 + rpm / 2000;
+                        wg = rpm > 3000 ? 62 + Math.sin(t * 2) * 6 : 90; }
+    else              { tps = 0;  rpm += (1800 - rpm) * 0.04; target = -12; lam = 1.6; tim = 25; wg = 0; }               // lift
+    if (ph > 7.4 && ph < 7.6 && rpm > 6000) { rpm -= 2200; gear = 3; } // upshift
+    boost += (target - boost) * (target > boost ? 0.09 : 0.25);
+    ect += (ph > 5 && ph < 10 ? 0.06 : -0.02); ect = Math.min(112, Math.max(88, ect));
+    V.baro = 101.3; V.map = 101.3 + boost / 0.145038 + nz(1); V.mapTarget = 101.3 + Math.max(target, 0) / 0.145038;
+    V.rpm = Math.max(0, rpm + nz(30)); V.tps = tps; V.load = tps ? 40 + boost * 3 : 18; V.gear = gear;
+    V.timing = tim + nz(1); V.lambda = lam + nz(0.02); V.lambdaTarget = tps === 100 ? 0.79 : 1.0;
+    V.ect = ect; V.iat = 28 + Math.max(0, boost) * 0.9; V.wgdc = wg;
+    V.lpfp = tps === 100 ? 4.6 + nz(0.15) : 5.2 + nz(0.05); V.rail = tps === 100 ? 170 + nz(8) : 55 + nz(2);
+    V.oil = 104 + ect * 0.1; V.speed = rpm / 60 * (gear * 0.55); V.stft = nz(4); V.ltft = 2.3; V.volts = 14.2 + nz(0.1);
+    logRow();
+  }, 50);
+}
+
+// ---------- logging (every channel, metric, like an MHD log) ----------
+const LOG_COLS = [['rpm', 'rpm'], ['map', 'kPa'], ['mapTarget', 'kPa'], ['baro', 'kPa'], ['tps', '%'], ['timing', 'deg'],
+  ['lambda', 'lambda'], ['lambdaTarget', 'lambda'], ['wgdc', '%'], ['lpfp', 'bar'], ['rail', 'bar'], ['load', '%'],
+  ['ect', 'C'], ['iat', 'C'], ['oil', 'C'], ['speed', 'kmh'], ['gear', ''], ['stft', '%'], ['ltft', '%'], ['volts', 'V']];
+let logging = false, logRows = [], logStart = 0;
+function logRow() {
+  if (!logging) return;
+  const boost = V.map == null ? '' : ((V.map - (V.baro ?? 101.3)) * 0.145038).toFixed(2);
+  logRows.push([((performance.now() - logStart) / 1000).toFixed(3), boost,
+    ...LOG_COLS.map(([k]) => V[k] == null ? '' : +V[k].toFixed(3))].join(','));
+}
+function toggleLog() {
+  if (!logging) { logging = true; logRows = []; logStart = performance.now(); updateButtons(); return; }
+  logging = false; updateButtons();
+  if (!logRows.length) return;
+  const head = ['time_s', 'boost_psi', ...LOG_COLS.map(([k, u]) => u ? `${k}_${u}` : k)].join(',');
+  const blob = new Blob([head + '\n' + logRows.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `e92-log-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`;
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---------- UI ----------
+const $ = id => document.getElementById(id);
+function setStatus(text, cls) { $('status').textContent = text; $('dot').className = 'dot ' + (cls || ''); }
+let toastT;
+function toast(msg) { const el = $('toast'); el.textContent = msg; el.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => el.style.display = 'none', 5000); }
+const linked = () => !!mode && mode !== 'demo';
+function updateButtons() {
+  const c = $('btnConnect');
+  c.textContent = connecting ? 'Connecting…' : linked() ? 'Disconnect' : 'Connect';
+  c.disabled = connecting;
+  c.classList.toggle('primary', !linked() && !connecting);
+  $('btnDemo').classList.toggle('active', mode === 'demo');
+  $('btnLog').classList.toggle('active', logging);
+  $('btnLog').textContent = logging ? '■ Save log' : '● Log';
+}
+let wakeLock = null;
+async function keepAwake() { try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch {} }
+document.addEventListener('visibilitychange', () => { if (mode && document.visibilityState === 'visible') keepAwake(); });
+
+const pick = $('pick');
+$('btnConnect').onclick = () => {
+  if (linked()) return disconnect();
+  const kinds = [navigator.bluetooth && 'ble', navigator.serial && 'serial'].filter(Boolean);
+  if (!kinds.length) return toast("This browser can't reach an OBD2 adapter. Use Chrome on Android, or Chrome/Edge on a computer.");
+  if (kinds.length === 1) return connect(kinds[0]);
+  for (const b of pick.querySelectorAll('.choice')) b.classList.toggle('last', b.value === S.lastConn);
+  pick.showModal();
+};
+// connect straight from the click so the browser's device picker still counts it as a user gesture
+pick.querySelectorAll('.choice').forEach(b => b.onclick = () => { pick.close(); connect(b.value); });
+$('btnDemo').onclick = startDemo;
+$('btnLog').onclick = toggleLog;
+$('btnPeaks').onclick = resetPeaks;
+$('btnFs').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {});
+
+const dlg = $('dlg'), form = dlg.querySelector('form');
+const LABELS = { boost: 'Boost (+ target)', rpm: 'RPM + gear', afr: 'AFR / Lambda (+ target)', coolant: 'Coolant temp', iat: 'Charge air temp',
+  oil: 'Oil temp', lpfp: 'Low-pressure fuel', rail: 'Rail pressure (HPFP)', wgdc: 'Wastegate duty', timing: 'Timing advance',
+  volts: 'Battery voltage', throttle: 'Pedal position', load: 'Engine load', speed: 'Speed', stft: 'Short fuel trim', ltft: 'Long fuel trim' };
+$('btnSettings').onclick = () => {
+  form.dme.value = S.dme; form.units.value = S.units; form.afr.value = S.afr; form.shiftRpm.value = S.shiftRpm; form.baud.value = S.baud;
+  $('gaugeChecks').innerHTML = ALL_GAUGES.map(id =>
+    `<label><input type="checkbox" value="${id}" ${S.visible.includes(id) ? 'checked' : ''}> ${LABELS[id]}</label>`).join('');
+  dlg.showModal();
+};
+dlg.addEventListener('close', () => {
+  if (dlg.returnValue !== 'ok') return;
+  const checked = [...$('gaugeChecks').querySelectorAll('input:checked')].map(i => i.value);
+  // keep the user's existing order, append newly ticked gauges
+  S.visible = [...S.visible.filter(id => checked.includes(id)), ...checked.filter(id => !S.visible.includes(id))];
+  S.dme = form.dme.value; S.units = form.units.value; S.afr = form.afr.value;
+  S.shiftRpm = Math.min(8000, Math.max(2000, +form.shiftRpm.value || DEFAULTS.shiftRpm)); S.baud = +form.baud.value;
+  saveSettings(); buildGauges();
+});
+
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+buildGauges();
+(function loop() { render(); requestAnimationFrame(loop); })();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "E92 335i Gauges",
+  "short_name": "E92 Gauges",
+  "description": "Live boost, AFR, fuel pressure and temperature gauges for the N54 / N55 E92 335i.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
