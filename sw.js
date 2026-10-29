@@ -1,5 +1,5 @@
 // Lets the app open with no signal in the car. Network first, so updates show up as soon as you're online.
-const CACHE = 'e92-gauges-v1';
+const CACHE = 'e92-gauges-v2';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES))); self.skipWaiting(); });

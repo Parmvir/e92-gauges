@@ -41,6 +41,7 @@
   .choice { display: block; width: 100%; text-align: left; padding: 14px 16px; margin-bottom: 10px; font-size: 16px; font-weight: 600; }
   .choice small { display: block; color: var(--muted); font-size: 12px; font-weight: 400; margin-top: 4px; }
   .choice.last { border-color: var(--amber); }
+  .choice[hidden] { display: none; }
 
   .shift { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; padding: 6px 12px 0; }
   .shift i { height: 8px; border-radius: 3px; background: #140d07; }
@@ -131,11 +132,8 @@
       <label><input type="radio" name="afr" value="afr"> AFR (gas)</label>
       <label><input type="radio" name="afr" value="lambda"> Lambda</label>
     </fieldset>
-    <fieldset><legend>Shift light &amp; adapter</legend>
+    <fieldset><legend>Shift light</legend>
       <label>Shift at <input type="number" name="shiftRpm" min="2000" max="8000" step="100"> rpm</label>
-      <label>USB baud <select name="baud">
-        <option>38400</option><option>115200</option><option>9600</option><option>500000</option>
-      </select></label>
     </fieldset>
     <fieldset><legend>Gauges (first two shown large)</legend>
       <div class="grid2" id="gaugeChecks"></div>
@@ -147,8 +145,9 @@
   <form method="dialog">
     <h2>CONNECT</h2>
     <button type="button" class="choice" value="ble">Bluetooth<small>BLE adapter: OBDLink CX, Vgate iCar Pro, Veepeak BLE…</small></button>
-    <button type="button" class="choice" value="serial">USB / COM port<small>USB cable, or a classic Bluetooth adapter paired to this computer</small></button>
-    <p class="hint">Ignition on, adapter plugged into the OBD port under the dash.</p>
+    <button type="button" class="choice" value="usb">USB cable<small>Plugged into the phone with a USB-OTG adapter</small></button>
+    <button type="button" class="choice" value="serial">USB cable / COM port<small>USB cable, or a classic Bluetooth adapter paired to this computer</small></button>
+    <p class="hint">Ignition on, adapter plugged into the OBD port under the dash. Cables with an HS-CAN / MS-CAN switch: set it to HS-CAN.</p>
     <div class="row"><button value="cancel">Cancel</button></div>
   </form>
 </dialog>
@@ -448,19 +447,106 @@ async function bleTransport() {
 async function serialTransport() {
   if (!navigator.serial) throw new Error('Web Serial not available. Use Chrome or Edge on a computer.');
   const port = await navigator.serial.requestPort();
-  await port.open({ baudRate: +S.baud });
-  const writer = port.writable.getWriter(), reader = port.readable.getReader();
-  const t = { onData: () => {}, onClose: () => {}, write: s => writer.write(enc.encode(s)) };
-  let open = true;
-  (async () => {
-    try { while (open) { const { value, done } = await reader.read(); if (done) break; t.onData(dec.decode(value)); } }
-    catch {} finally { if (open) t.onClose(); }
-  })();
-  t.close = async () => { open = false; try { await reader.cancel(); reader.releaseLock(); writer.releaseLock(); await port.close(); } catch {} };
+  const t = { onData: () => {}, onClose: () => {} };
+  let reader = null, writer = null;
+  const shut = async () => {
+    const r = reader; reader = null;
+    if (r) try { await r.cancel(); r.releaseLock(); writer.releaseLock(); await port.close(); } catch {}
+  };
+  // reopening the port is the only way Web Serial changes speed
+  t.setBaud = async baud => {
+    await shut();
+    await port.open({ baudRate: baud });
+    const r = reader = port.readable.getReader();
+    writer = port.writable.getWriter();
+    (async () => {
+      try { for (;;) { const { value, done } = await r.read(); if (done) break; t.onData(dec.decode(value)); } }
+      catch {} finally { if (reader === r) t.onClose(); }   // unplugged, not closed by us
+    })();
+  };
+  t.write = s => writer.write(enc.encode(s));
+  t.close = shut;
   return t;
 }
 
-const TRANSPORTS = { ble: bleTransport, serial: serialTransport };
+// Android phones: drive the cable's USB-serial chip directly over WebUSB (FTDI FT232 or CH340).
+async function usbTransport() {
+  if (!navigator.usb) throw new Error('USB cables need Chrome on Android or on a computer.');
+  const device = await navigator.usb.requestDevice({ filters: [{ vendorId: 0x0403 }, { vendorId: 0x1A86 }] });
+  setStatus('Opening USB cable…', 'busy');
+  await device.open();
+  if (!device.configuration) await device.selectConfiguration(1);
+  await device.claimInterface(0);
+  const eps = device.configuration.interfaces[0].alternate.endpoints;
+  const epIn = eps.find(e => e.direction === 'in' && e.type === 'bulk'), epOut = eps.find(e => e.direction === 'out' && e.type === 'bulk');
+  const ctl = (request, value, index = 0) => device.controlTransferOut({ requestType: 'vendor', recipient: 'device', request, value, index });
+  const ftdi = device.vendorId === 0x0403;
+  const t = { onData: () => {}, onClose: () => {} };
+  if (ftdi) {
+    await ctl(0x00, 0);          // reset
+    await ctl(0x04, 0x0008);     // 8 data bits, no parity, 1 stop bit
+    await ctl(0x02, 0);          // no flow control
+    await ctl(0x01, 0x0303);     // DTR + RTS on
+    await ctl(0x09, 2);          // 2 ms latency timer instead of the default 16 ms, so answers arrive sooner
+    t.setBaud = baud => {
+      const d3 = Math.round(48e6 / (2 * baud)), div = (d3 >> 3) | ([0, 3, 2, 4, 1, 5, 6, 7][d3 & 7] << 14);
+      return ctl(0x03, div & 0xFFFF, div >> 16);
+    };
+  } else {
+    await ctl(0xA1, 0, 0);                 // init
+    await ctl(0x9A, 0x2518, 0x00C3);       // 8N1, receiver + transmitter on
+    await ctl(0xA1, 0x501F, 0xD90A);
+    await ctl(0xA4, ~0x60 & 0xFFFF, 0);    // DTR + RTS on (active low)
+    t.setBaud = async baud => {
+      let factor = Math.floor(1532620800 / baud), div = 3;
+      while (factor > 0xFFF0 && div > 0) { factor >>= 3; div--; }
+      factor = 0x10000 - factor;
+      await ctl(0x9A, 0x1312, (factor & 0xFF00) | div | 0x80);
+      await ctl(0x9A, 0x0F2C, factor & 0xFF);
+    };
+  }
+  let open = true;
+  (async () => {
+    try {
+      while (open) {
+        const r = await device.transferIn(epIn.endpointNumber, epIn.packetSize);
+        if (r.status === 'stall') { await device.clearHalt('in', epIn.endpointNumber); continue; }
+        if (!r.data || !r.data.byteLength) continue;
+        let b = new Uint8Array(r.data.buffer, r.data.byteOffset, r.data.byteLength);
+        if (ftdi) {   // every FTDI packet starts with two modem-status bytes
+          const out = [];
+          for (let i = 0; i < b.length; i += epIn.packetSize) out.push(...b.subarray(i + 2, i + epIn.packetSize));
+          b = Uint8Array.from(out);
+        }
+        if (b.length) t.onData(dec.decode(b));
+      }
+    } catch {} finally { if (open) { open = false; t.onClose(); } }
+  })();
+  let chain = Promise.resolve();
+  t.write = s => (chain = chain.then(() => device.transferOut(epOut.endpointNumber, enc.encode(s))));
+  t.close = async () => { open = false; try { await device.releaseInterface(0); await device.close(); } catch {} };
+  return t;
+}
+
+// Cables ship set to different speeds (38400 and 115200 are common): try each until the ELM chip answers.
+const BAUDS = [38400, 115200, 9600, 230400, 57600, 500000];
+async function findBaud(t) {
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  for (const baud of [S.baud, ...BAUDS.filter(b => b !== S.baud)]) {
+    await t.setBaud(baud);
+    let got = '';
+    t.onData = s => { got += s; };
+    await t.write('\r');
+    await wait(150);
+    got = '';
+    await t.write('ATI\r');
+    for (let i = 0; i < 10 && !/ELM|STN|OBD/i.test(got); i++) await wait(60);
+    if (/ELM|STN|OBD/i.test(got)) { S.baud = baud; saveSettings(); return; }
+  }
+  throw new Error("The cable didn't answer. Check it's plugged into the car with the ignition on, and the HS/MS switch is on HS-CAN.");
+}
+
+const TRANSPORTS = { ble: bleTransport, serial: serialTransport, usb: usbTransport };
 
 // ---------- ELM327 ----------
 class ELM {
@@ -691,6 +777,7 @@ async function connect(kind) {
   try {
     setStatus('Connecting…', 'busy');
     transport = await TRANSPORTS[kind]();
+    if (transport.setBaud) { setStatus('Finding cable speed…', 'busy'); await findBaud(transport); }
     transport.onClose = () => running && disconnect('Adapter disconnected.');
     elm = new ELM(transport);
     await elm.reset();
@@ -803,10 +890,12 @@ document.addEventListener('visibilitychange', () => { if (mode && document.visib
 const pick = $('pick');
 $('btnConnect').onclick = () => {
   if (linked()) return disconnect();
-  const kinds = [navigator.bluetooth && 'ble', navigator.serial && 'serial'].filter(Boolean);
+  // phones reach USB cables through WebUSB; computers through the serial (COM) port the driver creates
+  const android = /Android/i.test(navigator.userAgent);
+  const kinds = [navigator.bluetooth && 'ble', android && navigator.usb && 'usb', !android && navigator.serial && 'serial'].filter(Boolean);
   if (!kinds.length) return toast("This browser can't reach an OBD2 adapter. Use Chrome on Android, or Chrome/Edge on a computer.");
   if (kinds.length === 1) return connect(kinds[0]);
-  for (const b of pick.querySelectorAll('.choice')) b.classList.toggle('last', b.value === S.lastConn);
+  for (const b of pick.querySelectorAll('.choice')) { b.hidden = !kinds.includes(b.value); b.classList.toggle('last', b.value === S.lastConn); }
   pick.showModal();
 };
 // connect straight from the click so the browser's device picker still counts it as a user gesture
@@ -821,7 +910,7 @@ const LABELS = { boost: 'Boost (+ target)', rpm: 'RPM + gear', afr: 'AFR / Lambd
   oil: 'Oil temp', lpfp: 'Low-pressure fuel', rail: 'Rail pressure (HPFP)', wgdc: 'Wastegate duty', timing: 'Timing advance',
   volts: 'Battery voltage', throttle: 'Pedal position', load: 'Engine load', speed: 'Speed', stft: 'Short fuel trim', ltft: 'Long fuel trim' };
 $('btnSettings').onclick = () => {
-  form.dme.value = S.dme; form.units.value = S.units; form.afr.value = S.afr; form.shiftRpm.value = S.shiftRpm; form.baud.value = S.baud;
+  form.dme.value = S.dme; form.units.value = S.units; form.afr.value = S.afr; form.shiftRpm.value = S.shiftRpm;
   $('gaugeChecks').innerHTML = ALL_GAUGES.map(id =>
     `<label><input type="checkbox" value="${id}" ${S.visible.includes(id) ? 'checked' : ''}> ${LABELS[id]}</label>`).join('');
   dlg.showModal();
@@ -832,7 +921,7 @@ dlg.addEventListener('close', () => {
   // keep the user's existing order, append newly ticked gauges
   S.visible = [...S.visible.filter(id => checked.includes(id)), ...checked.filter(id => !S.visible.includes(id))];
   S.dme = form.dme.value; S.units = form.units.value; S.afr = form.afr.value;
-  S.shiftRpm = Math.min(8000, Math.max(2000, +form.shiftRpm.value || DEFAULTS.shiftRpm)); S.baud = +form.baud.value;
+  S.shiftRpm = Math.min(8000, Math.max(2000, +form.shiftRpm.value || DEFAULTS.shiftRpm));
   saveSettings(); buildGauges();
 });
 

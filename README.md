@@ -8,10 +8,12 @@ It talks straight to the DME over BMW D-CAN (the same diagnostic protocol INPA, 
 
 ## What you need
 
-- A **Bluetooth LE** OBD2 adapter. OBDLink CX is the safe choice (works with BMW D-CAN and with iPhone). Cheap ELM327 clones may only manage standard OBD2.
-- **Android:** Chrome. Open the link, then menu → *Add to Home screen*.
-- **iPhone:** Safari can't use Bluetooth. Open the link in the free *Bluefy – Web BLE Browser* app.
-- **Computer:** Chrome or Edge, with a USB adapter or a Bluetooth one.
+- An OBD2 adapter:
+  - **Bluetooth LE**: OBDLink CX is the safe choice (works with BMW D-CAN and with iPhone). Cheap ELM327 clones may only manage standard OBD2.
+  - **USB cable** with an FTDI or CH340 chip, e.g. the "FORScan" ELM327 v1.5 cables (FT232RL + PIC18F25K80). Set the HS-CAN / MS-CAN switch to **HS-CAN**. The app finds the cable's speed by itself.
+- **Android:** Chrome. Open the link, then menu → *Add to Home screen*. USB cables plug in through a USB-OTG adapter.
+- **iPhone:** Safari can't use Bluetooth. Open the link in the free *Bluefy – Web BLE Browser* app. USB cables can't work on iPhone.
+- **Computer:** Chrome or Edge, with a USB cable (pick *USB cable / COM port*) or a Bluetooth adapter.
 
 Ignition on, tap **Connect**, pick the adapter. **Demo** shows the gauges without a car.
 

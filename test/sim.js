@@ -74,10 +74,10 @@
     return lines.join('\r');
   }
 
-  TRANSPORTS.sim = async () => {
+  // The ELM327 chip itself: takes typed text, calls out() with what it prints
+  function adapter(out) {
     const st = { caf: true, r: true, rx: null };
-    const t = { onData: () => {}, onClose: () => {}, close() {} };
-    const reply = s => setTimeout(() => t.onData(s + '\r\r>'), 4);
+    const reply = s => setTimeout(() => out(s + '\r\r>'), 4);
     // DME → tester frames the way an ELM prints them with headers on and spaces off
     const frames = msg => {
       if (msg.length <= 6) return ['612F1' + hx([msg.length, ...msg])];
@@ -87,8 +87,9 @@
     };
     function handle(c) {
       SIM.log.push(c);
+      if (!c) return reply('');
       if (/^(AT|ST)/.test(c)) {
-        if (c === 'ATZ') { Object.assign(st, { caf: true, r: true }); return reply('ELM327 v1.5'); }
+        if (c === 'ATZ' || c === 'ATI') { Object.assign(st, c === 'ATZ' ? { caf: true, r: true } : {}); return reply('ELM327 v1.5'); }
         if (c.startsWith('ST') || (SIM.variant === 'obd' && c === 'ATCEA12')) return reply('?');
         if (c === 'ATCAF0' || c === 'ATCAF1') st.caf = c.endsWith('1');
         if (c === 'ATR0' || c === 'ATR1') st.r = c.endsWith('1');
@@ -114,10 +115,52 @@
       reply(q ? frames(dme(q)).join('\r') : 'NO DATA');
     }
     let line = '';
-    t.write = s => {
-      line += s;
-      for (let i; (i = line.indexOf('\r')) >= 0; line = line.slice(i + 1)) handle(line.slice(0, i).replace(/\s/g, '').toUpperCase());
+    return {
+      write(s) {
+        line += s;
+        for (let i; (i = line.indexOf('\r')) >= 0; line = line.slice(i + 1)) handle(line.slice(0, i).replace(/\s/g, '').toUpperCase());
+      },
     };
+  }
+
+  TRANSPORTS.sim = async () => {
+    const t = { onData: () => {}, onClose: () => {}, close() {} };
+    t.write = adapter(s => t.onData(s)).write;
     return t;
   };
+
+  // Fake FTDI USB cable for the WebUSB path: its ELM chip only talks at SIM.usb.baud, and every
+  // 64-byte packet it sends starts with two modem-status bytes, like the real FT232R.
+  SIM.usb = { baud: 115200, ctl: [] };
+  const FTDI_DIVISORS = { 0x4138: 9600, 0xC04E: 38400, 0x001A: 115200, 0x0006: 500000 };   // FTDI's published values
+  const fakeFtdi = () => {
+    let baud = 0, closed = false;
+    const queue = [], te = new TextEncoder(), td = new TextDecoder();
+    const elm = adapter(s => {
+      if (baud !== SIM.usb.baud) return;
+      const b = te.encode(s);
+      for (let i = 0; i < b.length; i += 62) queue.push([0x01, 0x60, ...b.slice(i, i + 62)]);
+    });
+    return {
+      vendorId: 0x0403, productId: 0x6001, configuration: null,
+      async open() {}, async claimInterface() {}, async releaseInterface() {}, async close() { closed = true; },
+      async selectConfiguration() {
+        this.configuration = { interfaces: [{ alternate: { endpoints: [
+          { direction: 'in', type: 'bulk', endpointNumber: 1, packetSize: 64 },
+          { direction: 'out', type: 'bulk', endpointNumber: 2, packetSize: 64 }] } }] };
+      },
+      async controlTransferOut(s) {
+        SIM.usb.ctl.push([s.request, s.value, s.index]);
+        if (s.request === 0x03) baud = FTDI_DIVISORS[s.value | (s.index << 16)] || -1;
+        return { status: 'ok' };
+      },
+      async transferIn() {
+        for (let i = 0; !queue.length && i < 3 && !closed; i++) await new Promise(r => setTimeout(r, 2));
+        if (closed) throw new DOMException('device closed', 'NetworkError');
+        return { status: 'ok', data: new DataView(new Uint8Array(queue.shift() || [0x01, 0x60]).buffer) };   // status-only when idle
+      },
+      async transferOut(ep, data) { if (baud === SIM.usb.baud) elm.write(td.decode(data)); return { status: 'ok' }; },
+    };
+  };
+  Object.defineProperty(navigator, 'usb', { configurable: true, value: { requestDevice: async () => fakeFtdi() } });
 })();
